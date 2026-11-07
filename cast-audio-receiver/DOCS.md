@@ -42,7 +42,7 @@ identities even when their displayed names match. A public release does not
 update an installation belonging to another repository. Do not uninstall the
 old App or start a duplicate against the same ports to resolve this. Back up and
 migrate its data/identities first; the public repository is
-`https://github.com/Allcrafter1/cast-audio-receiver-lab`.
+`https://github.com/danielslinder/cast-audio-receiver-lab`.
 # Local audio and embedded interface
 
 The app uses Home Assistant's shared PulseAudio service (`audio: true`), not

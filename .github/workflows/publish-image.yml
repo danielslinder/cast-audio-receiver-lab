@@ -48,6 +48,8 @@ jobs:
       - name: Refuse overwriting an existing version
         env:
           CANDIDATE_TAG: ${{ steps.version.outputs.tag }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 tools/release.py guard --expected-tag "$CANDIDATE_TAG"
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
@@ -65,7 +67,7 @@ jobs:
           build-args: |
             BUILD_ARCH=${{ matrix.ha_arch }}
             BUILD_VERSION=${{ steps.version.outputs.tag }}
-          outputs: type=image,name=ghcr.io/allcrafter1/cast-audio-receiver,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=ghcr.io/danielslinder/cast-audio-receiver,push-by-digest=true,name-canonical=true,push=true
           sbom: true
           provenance: mode=max
           cache-from: |
@@ -73,13 +75,13 @@ jobs:
             type=gha,scope=ci-${{ matrix.arch }}
           cache-to: type=gha,scope=publish-${{ matrix.arch }},mode=max,timeout=2m,ignore-error=true
           labels: |
-            org.opencontainers.image.source=https://github.com/Allcrafter1/cast-audio-receiver-lab
+            org.opencontainers.image.source=https://github.com/danielslinder/cast-audio-receiver-lab
             org.opencontainers.image.revision=${{ github.sha }}
       - name: Verify native runtime before promoting
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          image="ghcr.io/allcrafter1/cast-audio-receiver@$IMAGE_DIGEST"
+          image="ghcr.io/danielslinder/cast-audio-receiver@$IMAGE_DIGEST"
           docker pull "$image"
           docker run --rm --network none --entrypoint vibecast "$image" --help
           docker run --rm --network none --entrypoint cliairplay "$image" --check
@@ -90,7 +92,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
           IMAGE_TAG: ${{ steps.version.outputs.tag }}
         run: |
-          printf 'Image: `ghcr.io/allcrafter1/cast-audio-receiver:%s`\n\nDigest: `%s`\n' "$IMAGE_TAG" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Image: `ghcr.io/danielslinder/cast-audio-receiver:%s`\n\nDigest: `%s`\n' "$IMAGE_TAG" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
           printf '%s\n' "$IMAGE_DIGEST" > image-digest-${{ matrix.arch }}.txt
       - uses: actions/upload-artifact@v7
         with:
@@ -124,7 +126,7 @@ jobs:
           match = re.fullmatch(r'([0-9]+\.[0-9]+\.[0-9]+)\.dev([0-9]+)', version)
           if not match:
               raise SystemExit('Unsupported release version')
-          image = 'ghcr.io/allcrafter1/cast-audio-receiver'
+          image = 'ghcr.io/danielslinder/cast-audio-receiver'
           tag = image + ':' + match.group(1) + '-dev' + match.group(2)
           sources = []
           for arch in ('amd64', 'arm64'):

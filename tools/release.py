@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -17,8 +18,8 @@ import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-REPO = 'Allcrafter1/cast-audio-receiver-lab'
-IMAGE = 'ghcr.io/allcrafter1/cast-audio-receiver'
+REPO = 'danielslinder/cast-audio-receiver-lab'
+IMAGE = 'ghcr.io/danielslinder/cast-audio-receiver'
 
 
 def run(*args):
@@ -71,12 +72,22 @@ def prepare(version, root=ROOT):
 
 class Registry:
     def __init__(self):
-        url = 'https://ghcr.io/token?service=ghcr.io&scope=repository:allcrafter1/cast-audio-receiver:pull'
-        with urllib.request.urlopen(url, timeout=30) as response:
+        url = 'https://ghcr.io/token?service=ghcr.io&scope=repository:danielslinder/cast-audio-receiver:pull'
+        request = urllib.request.Request(url)
+        # A new/private package cannot issue anonymous pull tokens. Only build
+        # preflight supplies these; promotion still verifies anonymous access.
+        username = os.environ.get('GHCR_USERNAME')
+        password = os.environ.get('GHCR_TOKEN')
+        if bool(username) != bool(password):
+            raise ValueError('GHCR_USERNAME and GHCR_TOKEN must be supplied together')
+        if username and password:
+            credentials = base64.b64encode(f'{username}:{password}'.encode()).decode()
+            request.add_header('Authorization', 'Basic ' + credentials)
+        with urllib.request.urlopen(request, timeout=30) as response:
             self.token = json.load(response)['token']
 
     def get(self, path, expected=None):
-        request = urllib.request.Request('https://ghcr.io/v2/allcrafter1/cast-audio-receiver/' + path,
+        request = urllib.request.Request('https://ghcr.io/v2/danielslinder/cast-audio-receiver/' + path,
             headers={'Authorization': 'Bearer ' + self.token,
                      'Accept': 'application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json'})
         with urllib.request.urlopen(request, timeout=60) as response:

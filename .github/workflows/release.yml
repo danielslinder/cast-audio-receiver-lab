@@ -37,6 +37,8 @@ jobs:
         env:
           CANDIDATE_TAG: ${{ inputs.version }}
           GH_TOKEN: ${{ github.token }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 tools/release.py guard --expected-tag "$CANDIDATE_TAG"
           python3 tools/release.py wait-ci --expected-tag "$CANDIDATE_TAG"

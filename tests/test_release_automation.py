@@ -14,6 +14,34 @@ from tools import release
 
 
 class ReleaseAutomationTests(unittest.TestCase):
+    def test_registry_promotion_remains_anonymous_without_build_credentials(self):
+        with patch.dict(release.os.environ, {}, clear=True), patch.object(
+            release.urllib.request, 'urlopen', return_value=io.StringIO('{"token":"pull-token"}')
+        ) as open_url:
+            release.Registry()
+        request = open_url.call_args.args[0]
+        self.assertNotIn('Authorization', request.headers)
+
+    def test_registry_build_authentication_stays_in_header(self):
+        credentials = {'GHCR_USERNAME': 'builder', 'GHCR_TOKEN': 'temporary-build-token'}
+        with patch.dict(release.os.environ, credentials, clear=True), patch.object(
+            release.urllib.request, 'urlopen', return_value=io.StringIO('{"token":"pull-token"}')
+        ) as open_url:
+            release.Registry()
+        request = open_url.call_args.args[0]
+        encoded = request.headers['Authorization'].removeprefix('Basic ')
+        self.assertEqual(release.base64.b64decode(encoded).decode(), 'builder:temporary-build-token')
+        self.assertNotIn('temporary-build-token', request.full_url)
+
+    def test_registry_rejects_incomplete_credentials_before_network_access(self):
+        for credentials in ({'GHCR_USERNAME': 'builder'}, {'GHCR_TOKEN': 'temporary-build-token'}):
+            with self.subTest(credentials=list(credentials)), patch.dict(
+                release.os.environ, credentials, clear=True
+            ), patch.object(release.urllib.request, 'urlopen') as open_url:
+                with self.assertRaises(ValueError):
+                    release.Registry()
+                open_url.assert_not_called()
+
     def test_version_conversion_rejects_shell_and_stable_inputs(self):
         self.assertEqual(release.image_tag('0.6.0.dev21'), '0.6.0-dev21')
         for bad in ['0.6.0', '0.6.0-dev21', '0.6.0.dev21;echo', '../dev21']:
