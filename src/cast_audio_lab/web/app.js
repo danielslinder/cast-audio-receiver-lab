@@ -68,6 +68,7 @@ function applyLanguage() {
   document.documentElement.lang = language;
   document.title = t("page_title");
   document.querySelectorAll("[data-i18n]").forEach(n => { n.textContent = t(n.dataset.i18n, JSON.parse(n.dataset.i18nParams || "{}")); });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach(n => { n.placeholder = t(n.dataset.i18nPlaceholder); });
   document.querySelectorAll("[data-i18n-aria]").forEach(n => n.setAttribute("aria-label", t(n.dataset.i18nAria)));
   document.querySelectorAll("[data-process]").forEach(n => updateState(n, JSON.parse(n.dataset.process)));
   document.querySelectorAll("[data-language]").forEach(n => n.setAttribute("aria-pressed", String(n.dataset.language === language)));
@@ -120,7 +121,7 @@ function spotifySettings(route) {
       const enabled = document.createElement("input"); enabled.type = "checkbox"; enabled.checked = value.enabled;
       const enabledLabel = node("label", ""); enabledLabel.append(enabled, text(node("span", ""), "spotify_enabled"));
       const name = document.createElement("input"); name.value = value.name || route.name.replace(/ \(Cast\)$/, "") + " (Spotify)"; name.maxLength = 80; label(name, "spotify_name");
-      const key = document.createElement("input"); key.type = "password"; key.autocomplete = "off"; key.maxLength = 16384; label(key, "spotify_key"); key.placeholder = t("spotify_keep_key");
+      const key = document.createElement("input"); key.type = "password"; key.autocomplete = "off"; key.maxLength = 16384; label(key, "spotify_key"); key.dataset.i18nPlaceholder = "spotify_keep_key"; key.placeholder = t("spotify_keep_key");
       const keyHint = text(node("p", "", "meta"), value.key_set ? "spotify_key_saved" : "spotify_key_missing");
       const state = node("p", "", "state"); state.dataset.spotifyState = route.id; spotifyState(state, value.state);
       const save = action("spotify_save", async () => {
