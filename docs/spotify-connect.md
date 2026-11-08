@@ -27,6 +27,10 @@ Cast and Spotify share exclusive ownership of each physical output. A new Cast l
 
 ## Acceptance status
 
-The development ARM64 Linux probe produced real decoded audio and the user confirmed music on Küche. Live Soloist pause/resume, seek and track changes passed. This is distinct from installed Home Assistant acceptance. Both installed routes, simultaneous sessions using two accounts, disconnect/reconnect, and a 30-minute endurance run must pass before calling this feature supported. Existing Cast regressions are checked by the automated suite; audible Cast regression must also be verified after rollout.
+On Home Assistant OS with an ARM64 Raspberry Pi and **0.7.0-dev3**, the household tester confirmed audible Spotify music on both configured HomePods. Pause/resume, seeking and Next also passed on the first speaker. Existing route identities, personal keys and paired sessions survived the update. Native AMD64 and ARM64 image smoke tests and the automated regression suite passed; this does not certify other speaker models.
+
+Version dev3 corrects playback-position handling: Soloist reports a position anchor with a timestamp and playback speed. Repeated anchors must be extrapolated instead of being mistaken for seeks during AirPlay startup. Intentional cancellation of a buffering load also detaches its old PCM source before cleanup can report an error.
+
+A continuous 30-minute installed playback run, explicit disconnect/reconnect, simultaneous independent sessions with two accounts, and audible Cast regression after the update remain unverified. Discovery, a running process, or the earlier development probe do not satisfy these checks. The feature remains experimental while that acceptance work is open.
 
 References: [authentication](https://developer.spotify.com/documentation/soloist/concepts/authentication), [CLI](https://developer.spotify.com/documentation/soloist/reference/command-line), [control API](https://developer.spotify.com/documentation/soloist/reference/websocket-api).
