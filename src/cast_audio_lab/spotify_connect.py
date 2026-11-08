@@ -49,6 +49,27 @@ def media_metadata(item):
         artwork_url=artwork, item_id=label(item.get('uri')), duration=duration)
 
 
+def playback_position(data):
+    """Resolve Soloist's timestamped position anchor at the current wall clock."""
+    position = data.get('position') or {}
+    if not isinstance(position, dict):
+        raise ValueError('invalid Spotify position')
+    milliseconds = position.get('position_ms', 0)
+    speed = position.get('speed', 1 if data.get('status') == 'playing' else 0)
+    stamp = position.get('timestamp_ms')
+    for value in (milliseconds, speed):
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            raise ValueError('invalid Spotify position')
+    if speed > 8:
+        raise ValueError('invalid Spotify playback speed')
+    if stamp is not None:
+        if type(stamp) not in (int, float) or not math.isfinite(stamp) or stamp < 0:
+            raise ValueError('invalid Spotify position timestamp')
+        if stamp > 0:
+            milliseconds += max(0, time.time() * 1000 - stamp) * speed
+    return milliseconds / 1000, speed
+
+
 def diagnostic(state, reason='none'):
     global _last_diagnostic
     if state not in _STATES or reason not in {'none', 'startup_failed', 'process_exited',
@@ -208,6 +229,7 @@ class SoloistInput:
         self._status = 'stopped'
         self._active = False
         self._item = None
+        self._speed = 0.0
         self._position = 0.0
         self._position_at = time.monotonic()
         self._transition = asyncio.Lock()
@@ -345,22 +367,22 @@ class SoloistInput:
 
     async def _state(self, data):
         status = data.get('status')
+        if status == 'idle':
+            status = 'stopped'
         if status not in {'playing', 'paused', 'stopped', 'buffering'}:
             return
         active = bool(data.get('is_active'))
         item = data.get('item') or {}
-        position = (data.get('position') or {}).get('position_ms', 0)
-        if type(position) not in (int, float) or not math.isfinite(position) or position < 0:
-            raise ValueError('invalid Spotify position')
-        position /= 1000
+        position, speed = playback_position(data)
         metadata = media_metadata(item)
         uri = item.get('uri')
         now = time.monotonic()
         discontinuity = (self._item == uri and self._status == 'playing'
-                         and abs(position - self._position - (now - self._position_at)) > 2)
+                         and abs(position - self._position - (now - self._position_at) * self._speed) > 2)
         newly_playing = status == 'playing' and (self._status != 'playing' or not self._active)
         self._status, self._active = status, active
         self._position, self._position_at, self._item = position, now, uri
+        self._speed = speed
         if status in {'paused', 'stopped'} or not active:
             self._suppressed = False
             await self._stop_audio()
@@ -396,9 +418,13 @@ class SoloistInput:
 
     async def _start_audio(self, metadata, position):
         async with self._transition:
+            # Intentional replacement cancels a buffering AirPlay load, which
+            # publishes IDLE/ERROR during cleanup. Detach its buffer first so
+            # that status cannot pause the new Spotify selection.
+            previous, self._buffer = self._buffer, None
+            if previous:
+                previous.close()
             await self._cancel_load()
-            if self._buffer:
-                self._buffer.close()
             current = self._buffer = PcmBuffer()
             await self.source.set_metadata(metadata)
             async def load():

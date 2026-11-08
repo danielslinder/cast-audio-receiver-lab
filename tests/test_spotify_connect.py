@@ -223,3 +223,73 @@ class SpotifyApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status,403)
         response=await self.client.get('/api/routes/'+str(uuid.uuid4())+'/spotify')
         self.assertEqual(response.status,404)
+
+class SpotifyClockRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_repeated_position_anchor_does_not_cancel_slow_airplay_start(self):
+        import time
+        hardware=NullAudioBackend()
+        started=asyncio.Event();finish=asyncio.Event()
+        async def load_pcm(source,**kwargs):
+            started.set();await finish.wait()
+        hardware.load_pcm=load_pcm
+        hardware.update_pcm_metadata=AsyncMock()
+        output=SharedAudioOutput(hardware)
+        player=SoloistInput(output.input('spotify'),config_path='/unused',state_dir='/unused',client_dir='/unused',bus_address='private')
+        player.command=AsyncMock()
+        clock=Mock();clock.time.return_value=1000;clock.monotonic.return_value=100
+        clock_patch=patch('cast_audio_lab.spotify_connect.time',clock);clock_patch.start()
+        anchor=1000000
+        state={'status':'playing','is_active':True,'position':{'position_ms':1000,'timestamp_ms':anchor,'speed':1},'item':{'uri':'synthetic:track'}}
+        try:
+            await player._state(state);await started.wait()
+            original=player._buffer
+            # The SDK can return the same timestamped anchor after startup
+            # takes several seconds. It is not a seek back to position_ms.
+            clock.time.return_value=1003
+            clock.monotonic.return_value=103
+            await player._state(state)
+            self.assertIs(player._buffer,original)
+            self.assertFalse(original._closed)
+            player.command.assert_not_awaited()
+        finally:
+            finish.set();await player.close();await output.close();clock_patch.stop()
+
+    async def test_seek_during_airplay_start_does_not_pause_the_new_selection(self):
+        hardware=NullAudioBackend();started=asyncio.Event();finish=asyncio.Event()
+        async def load_pcm(source,**kwargs):
+            hardware._status.state='BUFFERING';hardware._emit_status();started.set()
+            try:await finish.wait()
+            except asyncio.CancelledError:
+                hardware._status.state='IDLE';hardware._status.idle_reason='ERROR';hardware._emit_status()
+                raise
+        hardware.load_pcm=load_pcm
+        output=SharedAudioOutput(hardware)
+        player=SoloistInput(output.input('spotify'),config_path='/unused',state_dir='/unused',client_dir='/unused',bus_address='private')
+        player.command=AsyncMock()
+        state={'status':'playing','is_active':True,'position':{'position_ms':1000},'item':{'uri':'synthetic:track'}}
+        try:
+            await player._state(state);await started.wait()
+            original=player._buffer
+            newer={**state,'position':{'position_ms':30000}}
+            await asyncio.wait_for(player._state(newer),2)
+            await asyncio.sleep(0);await asyncio.sleep(0)
+            self.assertIsNot(player._buffer,original)
+            self.assertIsNotNone(player._buffer)
+            self.assertTrue(original._closed)
+            player.command.assert_not_awaited()
+        finally:
+            finish.set();await player.close();await output.close()
+
+    def test_position_uses_anchor_timestamp_and_playback_speed(self):
+        from cast_audio_lab.spotify_connect import playback_position
+        with patch('cast_audio_lab.spotify_connect.time') as clock:
+            clock.time.return_value=1003
+            state={'status':'playing','position':{'position_ms':1000,'timestamp_ms':1000000,'speed':1}}
+            self.assertEqual(playback_position(state),(4,1))
+            state['position']['speed']=0
+            self.assertEqual(playback_position(state),(1,0))
+            state['position']['speed']=1.5
+            self.assertEqual(playback_position(state),(5.5,1.5))
+            for value in ('private-string',float('nan'),-1,True):
+                state['position']['timestamp_ms']=value
+                with self.assertRaises(ValueError):playback_position(state)

@@ -1,5 +1,11 @@
 # App changelog
 
+## 0.7.0-dev3 — Spotify playback position and startup correction
+
+- Resolve Soloist playback positions from their timestamp and speed. Repeated position anchors no longer trigger false seeks while AirPlay is buffering.
+- Detach the old PCM input before intentionally cancelling a load, preventing its cleanup status from pausing the replacement selection.
+- Add regressions for delayed AirPlay startup, seeks during startup, stationary positions, playback speeds and malformed timestamps. Preserve existing private keys, pairings and route identities.
+
 ## 0.7.0-dev2 — experimental Spotify Connect
 
 - Optional Spotify Connect entries for AirPlay speakers, using your personal Premium Soloist key. Enable and name them in each speaker’s Spotify Connect settings.
