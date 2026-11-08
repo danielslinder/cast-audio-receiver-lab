@@ -57,3 +57,13 @@ same-origin API calls. It adds no application login or token. Direct LAN access
 remains unauthenticated. Reopen the app panel after an update or expired HA
 session. If states disagree, report the version displayed by each page and any
 visible error; never include your ingress URL/session cookie in a public issue.
+
+## Experimental Spotify Connect (0.7.0-dev2)
+
+In **Open Web UI**, expand **Spotify Connect** on each AirPlay speaker. Enter a name such as `Kitchen (Spotify)` and your personal Premium [Soloist API key](https://developer.spotify.com/dashboard/soloist), enable it, and save. Saving restarts only that route. Select its new **Spotify Connect** name in Spotify and play to pair; the existing **Cast** name remains available for other apps.
+
+The password field never displays a stored key. Leave it blank to retain the saved key; replacing it clears that speaker’s previous account session/cache and requires pairing again. Each person needs their own personal key. Independent simultaneous playback needs separate Premium accounts and their respective keys.
+
+The official client is downloaded from Spotify into private app state at runtime and is not included in the image. Builds expire after 90 days; startup refreshes builds older than 75 days. Restart periodically to receive updates. Keys and paired sessions are included in app backups, so keep backups private. Spotify’s stream volume and the AirPlay output volume both affect loudness; hardware volume feedback into Spotify’s slider is not synchronized.
+
+A running process or discovery entry alone is not playback acceptance. Verify audible music and controls on each speaker after enabling. See the [full guide and current acceptance limits](https://github.com/danielslinder/cast-audio-receiver-lab/blob/main/docs/spotify-connect.md).
