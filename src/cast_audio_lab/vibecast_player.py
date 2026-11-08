@@ -475,6 +475,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument('--artwork-endpoint')
     parser.add_argument('--artwork-public-url')
+    parser.add_argument('--spotify-config', type=Path)
+    parser.add_argument('--spotify-state-dir', type=Path)
+    parser.add_argument('--spotify-client-dir', type=Path)
+    parser.add_argument('--spotify-bus')
     return parser
 
 
@@ -503,12 +507,21 @@ def create_output(args: argparse.Namespace) -> tuple[AudioBackend, str]:
     return backend, player_id
 
 
-async def run_player(player: VibecastAudioPlayer) -> None:
+async def run_player(player: VibecastAudioPlayer, spotify=None, output=None) -> None:
+    if spotify is not None:
+        spotify.task = asyncio.create_task(spotify.run())
     try:
         await player.run()
     finally:
-        await player._cancel_artwork()
-        await player.backend.shutdown()
+        try:
+            if spotify is not None:
+                await spotify.close()
+        finally:
+            await player._cancel_artwork()
+            if output is not None:
+                await output.close()
+            else:
+                await player.backend.shutdown()
 
 
 def main() -> None:
@@ -522,10 +535,20 @@ def main() -> None:
         backend, player_id = create_output(args)
     except (OSError, TypeError, ValueError) as exc:
         parser.error(str(exc))
+    spotify = output = None
+    if args.spotify_config:
+        if args.backend != 'airplay' or not args.spotify_state_dir or not args.spotify_client_dir:
+            parser.error('Spotify Connect requires an AirPlay route and private state directories')
+        from .audio_inputs import SharedAudioOutput
+        from .spotify_connect import SoloistInput
+        output = SharedAudioOutput(backend)
+        backend = output.input('cast')
+        spotify = SoloistInput(output.input('spotify'), config_path=args.spotify_config,
+            state_dir=args.spotify_state_dir, client_dir=args.spotify_client_dir, bus_address=args.spotify_bus)
     player = VibecastAudioPlayer(args.bridge, player_id, args.name, backend,
         artwork_endpoint=args.artwork_endpoint, artwork_public_url=args.artwork_public_url)
     try:
-        asyncio.run(run_player(player))
+        asyncio.run(run_player(player, spotify, output))
     except KeyboardInterrupt:
         pass
 

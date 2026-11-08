@@ -16,7 +16,7 @@ RUN git clone --filter=blob:none "${VIBECAST_REPOSITORY}" . \
     && git apply /tmp/vibecast-current.patch
 RUN cargo build --locked --release -p vibecast-cli
 
-FROM python:3.12-slim-bookworm AS python-builder
+FROM python:3.12-slim-trixie AS python-builder
 WORKDIR /src
 COPY config/container-build-cp312.lock.txt /tmp/build-requirements.txt
 RUN python -m pip install --no-cache-dir --disable-pip-version-check \
@@ -46,11 +46,12 @@ RUN case "$TARGETARCH" in \
     && echo "${airplay_sha}  /tmp/cliairplay" | sha256sum --check --strict \
     && chmod 0755 /tmp/cliairplay
 
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-trixie
 ARG TARGETARCH
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       ca-certificates ffmpeg libstdc++6 libssl3 mpv tini \
+       ca-certificates ffmpeg libstdc++6 libssl3t64 mpv tini libatomic1 \
+       libavahi-client3 avahi-daemon dbus pulseaudio pulseaudio-utils \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/cast-audio-receiver
 COPY config/container-linux-*-cp312.lock.txt /tmp/runtime-locks/
@@ -78,10 +79,13 @@ RUN dpkg-query -W > /usr/share/doc/cast-audio-receiver/debian-packages.txt \
     && mpv --version > /usr/share/doc/cast-audio-receiver/mpv-build.txt
 RUN groupadd --gid 1000 cast-audio \
     && useradd --uid 1000 --gid 1000 --create-home --shell /usr/sbin/nologin cast-audio \
+    && usermod --append --groups avahi cast-audio \
+    && mkdir -p /run/avahi-daemon \
+    && chown avahi:avahi /run/avahi-daemon && chmod 0770 /run/avahi-daemon \
     && mkdir -p /data/private && chown -R 1000:1000 /data
 ENV HOME=/home/cast-audio
 # Release metadata must not invalidate dependency installation/build layers.
-ARG BUILD_VERSION=0.7.0-dev1
+ARG BUILD_VERSION=0.7.0-dev2
 ARG BUILD_ARCH=${TARGETARCH}
 LABEL org.opencontainers.image.title="Cast Audio Receiver Lab"
 LABEL org.opencontainers.image.description="Experimental Cast audio receiver with modular local and AirPlay outputs"

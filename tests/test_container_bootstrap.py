@@ -39,7 +39,8 @@ class ContainerBootstrapTests(unittest.TestCase):
 
     def test_root_bootstrap_drops_privileges_before_exec(self):
         calls = []
-        with patch.object(container_bootstrap.os, "geteuid", return_value=0), \
+        with patch.object(container_bootstrap.grp, "getgrnam", return_value=type("Group", (), {"gr_gid": 123})()), \
+             patch.object(container_bootstrap.os, "geteuid", return_value=0), \
              patch.object(container_bootstrap, "prepare_state", side_effect=lambda path: calls.append(("prepare", path))), \
              patch.object(container_bootstrap, "import_certificate_bundle", return_value=None), \
              patch.object(container_bootstrap, "ensure_default_bundle", return_value=Path("/data/private/certs.json")), \
@@ -57,7 +58,7 @@ class ContainerBootstrapTests(unittest.TestCase):
             calls,
             [
                 ("prepare", Path("/data")),
-                ("groups", []),
+                ("groups", [123]),
                 ("gid", 1000),
                 ("uid", 1000),
                 (

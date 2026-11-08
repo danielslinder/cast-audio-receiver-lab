@@ -124,3 +124,7 @@ own complete inventory. Host FFmpeg/mpv and build tools are separate again.
 - Resolve incomplete/ambiguous source license records before publishing artifacts.
 - Include [project origin / AI disclosure](docs/PROJECT-ORIGIN.md), experimental
   limits and contribution guidance without claiming independent review.
+
+## Optional user-installed Spotify Soloist
+
+The experimental Spotify Connect input can download Spotify’s official Soloist client into the user’s private runtime state. Soloist is not included in this source distribution, wheel or container image. Its terms and third-party notices accompany the official download. See https://developer.spotify.com/documentation/soloist and docs/spotify-connect.md. No Spotify API key, account session or official binary is part of this repository.

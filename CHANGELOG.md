@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0.dev2 — experimental Spotify Connect input
+
+- Add an opt-in official Soloist input for each AirPlay speaker, with a private personal key field and separate Spotify Connect name. Existing Cast registrations and frontend snapshot remain unchanged.
+- Capture decoded audio as bounded 44.1 kHz stereo signed 16-bit PCM through the existing AirPlay output. Isolate speaker ownership, cancel displaced inputs, and clear account state when replacing a personal key.
+- Download the official client into private runtime state on first enable; no Spotify executable or key is distributed in the image. Refresh aging builds on startup.
+- Move the Python runtime to Debian Trixie for the official client’s glibc requirement; keep helpers unprivileged on an app-private D-Bus.
+- Experimental: Linux engine playback and controls passed the development probe; Home Assistant rollout and multi-account endurance acceptance remain pending.
+
 ## 0.7.0.dev1 — resilient YouTube sessions and Home Assistant controls
 
 - Preserve an active YouTube Music session for up to 60 seconds after an

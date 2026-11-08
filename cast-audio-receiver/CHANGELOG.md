@@ -1,5 +1,13 @@
 # App changelog
 
+## 0.7.0-dev2 — experimental Spotify Connect
+
+- Optional Spotify Connect entries for AirPlay speakers, using your personal Premium Soloist key. Enable and name them in each speaker’s Spotify Connect settings.
+- Existing Cast entries remain available for YouTube Music and other Cast senders.
+- Keys and paired sessions stay in private app state. Changing a key removes the previous account’s saved session for that speaker.
+- Downloads Spotify’s official client at runtime; Spotify builds expire and are refreshed on startup. See the Spotify Connect guide for account and update requirements.
+- Candidate release: Home Assistant hardware and endurance acceptance are still pending.
+
 ## 0.7.0-dev1 — resilient YouTube sessions and full Home Assistant controls
 
 - Keep an active YouTube Music session alive for up to 60 seconds after an

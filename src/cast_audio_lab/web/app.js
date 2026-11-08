@@ -38,6 +38,16 @@ const translations = {
     added: "Output added; still disabled.", network_added: "Experimental output added; still disabled.", searching: "Searching for {protocol} targets …", import_name: "Name for imported speaker", imported: "Already imported", import_disabled: "Import disabled", import_done: "Imported. Enable it in the configured outputs.", found: "{count} endpoints found. Selection is valid for 3 minutes."
   }
 };
+Object.assign(translations.en, {
+  spotify_connect: "Spotify Connect", spotify_hint: "Uses your personal Soloist key. Saving restarts only this speaker. Keep using its Cast entry for other apps.",
+  spotify_enabled: "Enable Spotify Connect", spotify_name: "Name in Spotify", spotify_key: "Personal Soloist API key", spotify_keep_key: "Leave blank to keep the saved key", spotify_save: "Save Spotify settings", spotify_key_saved: "A key is saved privately.", spotify_key_missing: "No key saved.",
+  spotify_starting: "Starting Spotify…", spotify_waiting_for_pairing: "Select this speaker in Spotify to pair.", spotify_ready: "Spotify ready", spotify_playing: "Playing via Spotify", spotify_paused: "Spotify paused", spotify_stopped: "Spotify stopped", spotify_disabled: "Spotify disabled", spotify_failed: "Spotify needs attention. Save settings to retry."
+});
+Object.assign(translations.de, {
+  spotify_connect: "Spotify Connect", spotify_hint: "Verwendet deinen persönlichen Soloist-Schlüssel. Speichern startet nur diesen Speaker neu. Der Cast-Eintrag bleibt für andere Apps verfügbar.",
+  spotify_enabled: "Spotify Connect aktivieren", spotify_name: "Name in Spotify", spotify_key: "Persönlicher Soloist-API-Schlüssel", spotify_keep_key: "Leer lassen, um den gespeicherten Schlüssel zu behalten", spotify_save: "Spotify-Einstellungen speichern", spotify_key_saved: "Ein Schlüssel ist privat gespeichert.", spotify_key_missing: "Noch kein Schlüssel gespeichert.",
+  spotify_starting: "Spotify startet…", spotify_waiting_for_pairing: "Diesen Speaker zum Koppeln in Spotify auswählen.", spotify_ready: "Spotify bereit", spotify_playing: "Wiedergabe über Spotify", spotify_paused: "Spotify pausiert", spotify_stopped: "Spotify gestoppt", spotify_disabled: "Spotify deaktiviert", spotify_failed: "Spotify benötigt Aufmerksamkeit. Einstellungen zum erneuten Versuch speichern."
+});
 const languageKey = "cast-audio-language";
 function initialLanguage() {
   try { const saved = localStorage.getItem(languageKey); if (saved === "de" || saved === "en") return saved; } catch (_) { /* Storage may be blocked in an iframe. */ }
@@ -94,6 +104,38 @@ function status(route) {
   const key = "state_" + route.process.state;
   return t("process_status", {state: t(Object.hasOwn(translations.en, key) ? key : "state_unknown"), count: route.process.restarts || 0});
 }
+function spotifyState(element, state) {
+  const key = "spotify_" + state;
+  text(element, Object.hasOwn(translations.en, key) ? key : "spotify_starting");
+}
+function spotifySettings(route) {
+  const details = node("details", "", "spotify-settings");
+  details.append(text(node("summary", ""), "spotify_connect"));
+  let loaded = false;
+  details.ontoggle = async () => {
+    if (!details.open || loaded) return;
+    loaded = true;
+    try {
+      const value = await api("/api/routes/" + route.id + "/spotify");
+      const enabled = document.createElement("input"); enabled.type = "checkbox"; enabled.checked = value.enabled;
+      const enabledLabel = node("label", ""); enabledLabel.append(enabled, text(node("span", ""), "spotify_enabled"));
+      const name = document.createElement("input"); name.value = value.name || route.name.replace(/ \(Cast\)$/, "") + " (Spotify)"; name.maxLength = 80; label(name, "spotify_name");
+      const key = document.createElement("input"); key.type = "password"; key.autocomplete = "off"; key.maxLength = 16384; label(key, "spotify_key"); key.placeholder = t("spotify_keep_key");
+      const keyHint = text(node("p", "", "meta"), value.key_set ? "spotify_key_saved" : "spotify_key_missing");
+      const state = node("p", "", "state"); state.dataset.spotifyState = route.id; spotifyState(state, value.state);
+      const save = action("spotify_save", async () => {
+        const body = {enabled: enabled.checked, name: name.value};
+        if (key.value) body.api_key = key.value;
+        const saved = await api("/api/routes/" + route.id + "/spotify", "POST", body);
+        key.value = ""; text(keyHint, saved.key_set ? "spotify_key_saved" : "spotify_key_missing"); spotifyState(state, saved.state);
+      });
+      const nameLabel = node("label", "", "spotify-field"); nameLabel.append(text(node("span", ""), "spotify_name"), name);
+      const keyLabel = node("label", "", "spotify-field"); keyLabel.append(text(node("span", ""), "spotify_key"), key);
+      details.append(text(node("p", "", "meta"), "spotify_hint"), enabledLabel, nameLabel, keyLabel, keyHint, save, state);
+    } catch (error) { loaded = false; showError(error); }
+  };
+  return details;
+}
 function renderRoutes(data) {
   renderedConfig = configKey(data.routes);
   const localExists = data.routes.some(route => route.backend === "mpv");
@@ -129,6 +171,7 @@ function renderRoutes(data) {
         await refresh();
       }, true), text(node("p", "", "meta"), "dlna_url_hint"));
     }
+    if (route.backend === "airplay") card.append(spotifySettings(route));
     $("routes").append(card);
   }
 }
@@ -143,6 +186,8 @@ async function refresh(poll = false) {
   if (poll) for (const route of data.routes) {
     const state = document.querySelector(`[data-state="${route.id}"]`);
     if (state) updateState(state, route.process);
+    const spotify = document.querySelector(`[data-spotify-state="${route.id}"]`);
+    if (spotify && route.process.spotify) spotifyState(spotify, route.process.spotify.state);
   }
 }
 document.querySelectorAll("[data-language]").forEach(button => { button.onclick = () => setLanguage(button.dataset.language); });

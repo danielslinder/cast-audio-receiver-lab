@@ -144,6 +144,27 @@ def create_app(manager, *, discover=discover_airplay, discover_renderers=discove
     async def support(request):
         return web.json_response(manager.support_snapshot(version=__version__))
 
+    async def spotify_settings(request):
+        async with manager.lock:
+            route = next((r for r in manager.routes if r.id == request.match_info['id']), None)
+            if route is None:
+                raise web.HTTPNotFound()
+            if request.method == 'GET':
+                return web.json_response(manager.spotify_public(route))
+            body = await request.json()
+            task = asyncio.create_task(manager.configure_spotify(route, body))
+            try:
+                result = await asyncio.shield(task)
+            except asyncio.CancelledError:
+                while not task.done():
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        continue
+                task.result()
+                raise
+            return web.json_response(result)
+
     async def patch_route(request):
         body = await request.json()
         if not isinstance(body, dict) or set(body) - {"name", "enabled", "target"} or not body:
@@ -293,6 +314,8 @@ def create_app(manager, *, discover=discover_airplay, discover_renderers=discove
     app.router.add_get("/api/routes", listing)
     app.router.add_post("/api/routes", add_route)
     app.router.add_patch("/api/routes/{id}", patch_route)
+    app.router.add_get('/api/routes/{id}/spotify', spotify_settings)
+    app.router.add_post('/api/routes/{id}/spotify', spotify_settings)
     app.router.add_delete("/api/routes/{id}", delete_route)
     app.router.add_post("/api/scan", scan)
     app.router.add_post("/api/scan/dlna", scan_dlna)

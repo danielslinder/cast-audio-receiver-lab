@@ -8,11 +8,13 @@ import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import sys
 import time
 from urllib.parse import urlsplit
 
 from .output_registry import adapter_arguments
+from .spotify_connect import SpotifyStore, SpotifyInfrastructure
 
 
 LOG = logging.getLogger(__name__)
@@ -35,6 +37,8 @@ class RouteManager:
         self.started_at = None
         self.artwork_endpoint = None
         self.artwork_public_url = None
+        self.spotify_store = SpotifyStore(self.store.directory)
+        self._spotify_infrastructure = None
 
     def command(self, route):
         argv = [sys.executable, "-m", "cast_audio_lab.vibecast_player", "--bridge", self.bridge,
@@ -46,13 +50,66 @@ class RouteManager:
         argv += adapter_arguments(
             route.backend, route, self.store.directory, self.cliairplay
         )
+        if route.backend == 'airplay' and self.spotify_store.load(route.id)['enabled']:
+            argv += ['--spotify-config', str(self.spotify_store.path(route.id)),
+                     '--spotify-state-dir', str(self.store.directory / 'spotify' / route.id),
+                     '--spotify-client-dir', str(self.store.directory / 'soloist-client')]
+            if self._spotify_infrastructure and self._spotify_infrastructure.address:
+                argv += ['--spotify-bus', self._spotify_infrastructure.address]
         return argv
+
+    async def _ensure_spotify(self):
+        if self._spotify_infrastructure is None:
+            self._spotify_infrastructure = SpotifyInfrastructure()
+        await self._spotify_infrastructure.start()
+
+    def spotify_public(self, route):
+        result = self.spotify_store.public(route.id)
+        state = self.states.get(route.id, {}).get('spotify', {})
+        result['state'] = (state.get('state', 'starting') if result['enabled'] and route.enabled
+                           else 'disabled')
+        result['reason'] = state.get('reason', 'none')
+        return result
+
+    async def configure_spotify(self, route, body):
+        if route.backend != 'airplay':
+            raise ValueError('Spotify Connect currently requires an AirPlay route')
+        name = route.name.removesuffix(' (Cast)')[:68] + ' (Spotify)'
+        previous = self.spotify_store.load(route.id)
+        value = self.spotify_store.updated(route.id, body, name)
+        if value['enabled'] and route.enabled:
+            await self._ensure_spotify()
+        self.spotify_store.save(route.id, value)
+        task = self.tasks.get(route.id)
+        if task:
+            task.cancel()
+            result = await asyncio.gather(task, return_exceptions=True)
+            if any(isinstance(item, Exception) for item in result):
+                raise RuntimeError('adapter cleanup failed')
+            del self.tasks[route.id]
+            self.states.pop(route.id, None)
+        if previous['api_key'] != value['api_key']:
+            # A personal key belongs to one account. Never reuse the previous
+            # account's cached credentials or decoded files after replacement.
+            state = self.store.directory / 'spotify' / route.id
+            if state.is_symlink():
+                state.unlink()
+            elif state.exists():
+                shutil.rmtree(state)
+        self._start_missing()
+        return self.spotify_public(route)
 
     async def start(self):
         self.store.acquire()
         try:
             self.routes = self.store.load()
             self.started_at = time.monotonic()
+            if any(route.enabled and route.backend == 'airplay'
+                   and self.spotify_store.load(route.id)['enabled'] for route in self.routes):
+                try:
+                    await self._ensure_spotify()
+                except (OSError, RuntimeError, TimeoutError):
+                    LOG.warning('Spotify discovery unavailable; Cast routes will still start')
             self._start_missing()
         except BaseException:
             self.store.release()
@@ -82,6 +139,12 @@ class RouteManager:
             del self.tasks[ident]
             self.states.pop(ident, None)
         self.routes = routes
+        if any(route.enabled and route.backend == 'airplay'
+               and self.spotify_store.load(route.id)['enabled'] for route in routes):
+            try:
+                await self._ensure_spotify()
+            except (OSError, RuntimeError, TimeoutError):
+                LOG.warning('Spotify discovery unavailable; Cast routes will still start')
         self._start_missing()
 
     def public(self):
@@ -177,6 +240,18 @@ class RouteManager:
     async def _drain(self, stream, handler, route_id=None):
         while chunk := await stream.readline():
             message = chunk.decode(errors="replace").rstrip()
+            spotify_marker = ' cast_audio_lab.spotify_connect: SPOTIFY_DIAGNOSTIC '
+            if spotify_marker in message:
+                fields = dict(part.split('=', 1) for part in message.split(spotify_marker, 1)[1].split()
+                              if part.count('=') == 1)
+                if (set(fields) == {'state', 'reason'} and
+                        fields['state'] in {'starting', 'waiting_for_pairing', 'ready', 'playing', 'paused', 'stopped', 'failed'} and
+                        fields['reason'] in {'none', 'startup_failed', 'process_exited', 'capture_failed',
+                            'transport_failed', 'control_failed', 'connection_failed', 'infrastructure_unavailable'}):
+                    if route_id in self.states:
+                        self.states[route_id]['spotify'] = fields
+                    LOG.info('SPOTIFY_DIAGNOSTIC state=%s reason=%s', fields['state'], fields['reason'])
+                continue
             health_marker = message.find(_HEALTH_SOURCE)
             if health_marker >= 0 and route_id in self.states:
                 health = message[health_marker + len(_HEALTH_SOURCE):]
@@ -293,4 +368,6 @@ class RouteManager:
                 task.cancel()
             await asyncio.gather(*self.tasks.values(), return_exceptions=True)
             self.tasks.clear()
+            if self._spotify_infrastructure:
+                await self._spotify_infrastructure.close()
             self.store.release()

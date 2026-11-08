@@ -337,10 +337,22 @@ class AirPlayAudioBackend(NullAudioBackend):
         self._decode_failed = asyncio.Event()
         self._start_lead_ms = 2250  # RAOP 2000ms + libraop minimum; replaced by reported latency
         self._route_protocol = target.protocol
+        self._live_artwork_task = None
 
     async def load(
         self, url: str, content_type: str, autoplay: bool, start_time: float
     ) -> None:
+        await self._load(url, content_type, autoplay, start_time)
+
+    async def load_pcm(self, source, *, autoplay: bool = True, start_time: float = 0.0) -> None:
+        """Play a bounded asynchronous source of 44.1 kHz stereo S16LE PCM.
+
+        The caller owns acquisition, source cancellation and seeking. PCM uses
+        the same acknowledged transport/FLUSH lifecycle as URL playback.
+        """
+        await self._load('pcm:live', 'audio/pcm', autoplay, start_time, source=source)
+
+    async def _load(self, url, content_type, autoplay, start_time, *, source=None) -> None:
         async with self._lock:
             if self._pipeline_cleanup_task is not None and not self._pipeline_cleanup_task.done():
                 await asyncio.shield(self._pipeline_cleanup_task)
@@ -375,7 +387,13 @@ class AirPlayAudioBackend(NullAudioBackend):
                 self._autoplay = autoplay
                 LOG.info("AirPlay load start=%.3f duration=%s artwork=%s", start_time,
                          self.metadata.duration, bool(self.metadata.artwork_url))
-                await self._start_pipeline(url, start_time)
+                if source is None:
+                    await self._start_pipeline(url, start_time)
+                else:
+                    if self._cli is None:
+                        await self._start_transport()
+                    assert self._cli is not None and self._cli.stdin is not None
+                    self._pump_task = asyncio.create_task(self._pump_pcm(source, self._cli.stdin))
                 self._status.url = url
                 self._status.content_type = content_type
                 await self._send_metadata()
@@ -441,6 +459,8 @@ class AirPlayAudioBackend(NullAudioBackend):
 
     async def seek(self, position: float) -> None:
         status = self.status()
+        if status.content_type == 'audio/pcm':
+            raise ValueError('Live PCM seeking is owned by its source controller')
         if status.url:
             await self.load(
                 status.url,
@@ -500,6 +520,25 @@ class AirPlayAudioBackend(NullAudioBackend):
         await super().set_metadata(metadata)
         # The adapter sets next-track metadata before load. Do not relabel the
         # old transport with the new title and the old position.
+
+    async def update_pcm_metadata(self, metadata: MediaMetadata, position: float) -> None:
+        """Update a continuous live source without restarting its transport."""
+        async with self._lock:
+            artwork_changed = metadata.artwork_url != self.metadata.artwork_url
+            await self.set_metadata(metadata)
+            self._set_position(max(0.0, position))
+            if self._cli is not None:
+                await self._send_metadata()
+                await self._send_progress()
+                if artwork_changed:
+                    if self._live_artwork_task is not None:
+                        self._live_artwork_task.cancel()
+                        await asyncio.gather(self._live_artwork_task, return_exceptions=True)
+                        if self._live_artwork_task in self._aux_tasks:
+                            self._aux_tasks.remove(self._live_artwork_task)
+                    self._prepared_artwork_url = None
+                    self._live_artwork_task = asyncio.create_task(self._deliver_artwork())
+                    self._aux_tasks.append(self._live_artwork_task)
 
     async def shutdown(self) -> None:
         await self.stop()
@@ -957,6 +996,12 @@ class AirPlayAudioBackend(NullAudioBackend):
                 await destination.drain()
                 self._decoded_bytes += len(chunk)
             decoder = self._decoder
+            if decoder is None and self._status.content_type == 'audio/pcm':
+                self._decode_failed.set()
+                self._status.state = 'IDLE'
+                self._status.idle_reason = 'ERROR'
+                self._emit_status()
+                return
             if decoder is not None:
                 returncode = await decoder.wait()
                 decoded_seconds = self._decoded_bytes / (44100 * 2 * 2)
@@ -992,7 +1037,7 @@ class AirPlayAudioBackend(NullAudioBackend):
                     await asyncio.sleep(0)
             else:
                 destination.close()
-        except (BrokenPipeError, ConnectionResetError):
+        except OSError:
             self._decode_failed.set()
             LOG.warning("AirPlay PCM transport closed unexpectedly")
             _diagnostic(logging.WARNING, "pcm_transport_closed", phase=self._transport_phase)

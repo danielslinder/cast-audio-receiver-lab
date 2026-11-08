@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import grp
 from pathlib import Path
 import json
 import sys
@@ -135,7 +136,13 @@ def main() -> None:
                 os.chmod(imported, 0o600)
                 os.chown(imported, SERVICE_UID, SERVICE_GID, follow_symlinks=False)
             os.environ["CAST_AUDIO_CERTS"] = str(imported)
-            os.setgroups([])
+            # Only the container-local discovery group's runtime directory is
+            # shared. No inherited supplementary or host D-Bus groups survive.
+            try:
+                groups = [grp.getgrnam('avahi').gr_gid]
+            except KeyError:
+                groups = []
+            os.setgroups(groups)
             os.setgid(SERVICE_GID)
             os.setuid(SERVICE_UID)
         except (OSError, ValueError) as error:

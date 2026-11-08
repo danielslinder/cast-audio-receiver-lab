@@ -182,3 +182,7 @@ other AI coding assistance. I have almost no programming
 experience but requirements, architecture and behavior were worked out together
 and then tested repeatedly on real devices. Experienced review and contributions
 are very welcome. 
+
+### Experimental Spotify Connect
+
+AirPlay speakers can optionally accept Spotify through a separate Spotify Connect entry using Spotify’s official Soloist Linux client and your personal Premium API key. Expand **Spotify Connect** on a speaker’s management card to configure it. The client is downloaded into private runtime state, never bundled in the image. See [setup, account requirements and acceptance status](docs/spotify-connect.md).
