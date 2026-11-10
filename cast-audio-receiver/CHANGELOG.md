@@ -1,5 +1,10 @@
 # App changelog
 
+## 0.7.0-dev4 — lower Spotify Connect capture latency
+
+- Cap the private PulseAudio sink render window at 50 ms and request 40 ms capture latency. This removes avoidable waiting before decoded Spotify audio reaches AirPlay.
+- In an ARM64 Linux test with real Spotify playback, the first Play command reached PCM in 476 ms compared with 1,430 ms previously. Two resume attempts took 36–39 ms compared with 328–345 ms. These measurements exclude AirPlay and the speaker.
+
 ## 0.7.0-dev3 — Spotify playback position and startup correction
 
 - Resolve Soloist playback positions from their timestamp and speed. Repeated position anchors no longer trigger false seeks while AirPlay is buffering.

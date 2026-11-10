@@ -289,14 +289,17 @@ class SoloistInput:
             PULSE_SERVER='unix:' + str(socket), PULSE_SINK='spotify',
             PULSE_RUNTIME_PATH=str(private), PULSE_STATE_PATH=str(private / 'pulse-state'),
             XDG_RUNTIME_DIR=str(private))
+        # This private sink only feeds a monitor. Disabling rewind caps its
+        # render window at 50 ms instead of PulseAudio's two-second default.
         pulse = await self._spawn('pulseaudio', '--daemonize=no', '--exit-idle-time=-1',
             '--disable-shm=yes', '--use-pid-file=no', '-n',
             '--load=module-native-protocol-unix socket=' + str(socket) + ' auth-anonymous=1',
-            '--load=module-null-sink sink_name=spotify rate=44100 channels=2 format=s16le',
+            '--load=module-null-sink sink_name=spotify rate=44100 channels=2 format=s16le norewinds=true',
             stdout=asyncio.subprocess.DEVNULL, env=env)
         await wait_path(socket, pulse)
         recorder = await self._spawn('parec', '--server=unix:' + str(socket),
             '--device=spotify.monitor', '--raw', '--format=s16le', '--rate=44100', '--channels=2',
+            '--latency-msec=40',
             stdout=asyncio.subprocess.PIPE, env=env)
         session = self.state_dir / 'session'
         session.mkdir(mode=0o700, exist_ok=True)
