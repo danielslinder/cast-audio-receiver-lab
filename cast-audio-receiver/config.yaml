@@ -1,5 +1,5 @@
 name: Cast Audio Receiver Lab
-version: "0.7.0-dev3"
+version: "0.7.0-dev4"
 slug: cast_audio_receiver
 description: Experimental audio-only Cast receiver with modular outputs
 url: https://github.com/danielslinder/cast-audio-receiver-lab
