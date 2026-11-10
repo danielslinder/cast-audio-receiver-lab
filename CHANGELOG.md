@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0.dev5 — faster Spotify AirPlay starts and skips
+
+- Start AirPlay and playback-control discovery together for Spotify audio, and wait for both before sending PCM.
+- Keep the AirPlay 2 connection available for 15 seconds after a Spotify pause. Early track changes discard queued PCM using the existing AirPlay flush and start commands.
+- On two HomePods, a test with generated PCM measured scheduled cold starts at 1.81–1.90 seconds versus 2.58–2.59 seconds with serial setup. Resume on the open connection took 0.29–0.30 seconds, and an early skip took 0.53–0.55 seconds. These timings come from the AirPlay sender schedule.
+
 ## 0.7.0.dev4 — lower Spotify Connect capture latency
 
 - Cap the private PulseAudio sink render window at 50 ms and request 40 ms capture latency. This removes avoidable waiting before decoded Spotify audio reaches AirPlay.

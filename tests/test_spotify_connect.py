@@ -15,7 +15,8 @@ from cast_audio_lab.soloist_assets import _install, download_url
 from cast_audio_lab.routes import RouteStore, Route
 from cast_audio_lab.route_manager import RouteManager
 from cast_audio_lab.audio_inputs import SharedAudioOutput
-from cast_audio_lab.backend import NullAudioBackend
+from cast_audio_lab.backend import MediaMetadata, NullAudioBackend
+from cast_audio_lab.pcm import PcmBuffer
 
 
 class SpotifyStoreTests(unittest.TestCase):
@@ -131,6 +132,81 @@ class SpotifyLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.player._start_audio.assert_not_awaited()
         await self.player._stop_audio()
         self.assertEqual(cast.status().url, 'new')
+
+    async def test_early_track_change_replaces_pcm_and_normal_end_keeps_it(self):
+        self.player._start_audio = AsyncMock()
+        self.source.update_pcm_metadata = AsyncMock()
+        first = self.state()
+        first["item"]["decorations"]["playback"] = {"duration_ms": 120000}
+        await self.player._state(first)
+        await self.source.load("audio", "audio/pcm", True, 0)
+
+        second = self.state()
+        second["item"]["uri"] = "track:two"
+        second["item"]["decorations"]["playback"] = {"duration_ms": 120000}
+        await self.player._state(second)
+        self.assertEqual(self.player._start_audio.await_count, 2)
+
+        self.player._position = 114
+        third = self.state()
+        third["item"]["uri"] = "track:three"
+        await self.player._state(third)
+        self.assertEqual(self.player._start_audio.await_count, 2)
+        self.source.update_pcm_metadata.assert_awaited_once()
+
+    async def test_pause_retains_output_briefly_and_then_releases_it(self):
+        await self.source.load("audio", "audio/pcm", True, 0)
+        self.output.backend.park_pcm = AsyncMock(return_value=True)
+        previous = self.player._buffer = PcmBuffer()
+        self.player._load_task = asyncio.get_running_loop().create_future()
+        self.player._load_task.set_result(None)
+        paused = self.state()
+        paused["status"] = "paused"
+
+        with patch("cast_audio_lab.spotify_connect._PAUSED_TRANSPORT_SECONDS", 0.01):
+            await self.player._state(paused)
+            expiry = self.player._park_expiry
+            self.assertTrue(self.source.owns_output)
+            self.assertFalse(previous.feed(b"stale PCM"))
+            await self.player._state(paused)
+            self.assertIs(self.player._park_expiry, expiry)
+            self.output.backend.park_pcm.assert_awaited_once()
+            await asyncio.wait_for(expiry, 1)
+        self.assertFalse(self.source.owns_output)
+
+    async def test_replacing_live_pcm_cancels_old_pump_before_closing_buffer(self):
+        hardware = self.output.backend
+        pump = None
+
+        async def load_pcm(buffer, **kwargs):
+            nonlocal pump
+            if pump:
+                pump.cancel()
+                await asyncio.gather(pump, return_exceptions=True)
+
+            async def read():
+                if not await buffer.read(4):
+                    hardware._status.state = "IDLE"
+                    hardware._status.idle_reason = "ERROR"
+                    hardware._emit_status()
+
+            pump = asyncio.create_task(read())
+            await hardware.load("pcm:live", "audio/pcm", True, 0)
+
+        hardware.load_pcm = load_pcm
+        try:
+            await self.player._start_audio(MediaMetadata(), 0)
+            await self.player._load_task
+            previous = self.player._buffer
+            await self.player._start_audio(MediaMetadata(), 30)
+            await self.player._load_task
+            self.player.command.assert_not_awaited()
+            self.assertFalse(previous.feed(b"stale PCM"))
+            self.assertTrue(self.source.owns_output)
+        finally:
+            if pump:
+                pump.cancel()
+                await asyncio.gather(pump, return_exceptions=True)
 
     async def test_control_failure_does_not_block_cast_takeover(self):
         await self.source.load('old', 'audio/pcm', True, 0)
@@ -275,6 +351,8 @@ class SpotifyClockRegressionTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0);await asyncio.sleep(0)
             self.assertIsNot(player._buffer,original)
             self.assertIsNotNone(player._buffer)
+            finish.set()
+            await player._load_task
             self.assertTrue(original._closed)
             player.command.assert_not_awaited()
         finally:

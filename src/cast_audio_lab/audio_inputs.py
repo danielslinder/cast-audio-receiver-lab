@@ -122,6 +122,11 @@ class AudioInput(NullAudioBackend):
         if self.owns_output:
             await self.output.backend.pause()
 
+    async def park_pcm(self):
+        async with self.output._lock:
+            park = getattr(self.output.backend, "park_pcm", None)
+            return self.owns_output and park is not None and await park()
+
     async def seek(self, position):
         if self.owns_output:
             await self.output.backend.seek(position)

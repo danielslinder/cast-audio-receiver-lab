@@ -209,6 +209,9 @@ class SpotifyInfrastructure:
             self.temporary = None
 
 
+_PAUSED_TRANSPORT_SECONDS = 15
+
+
 class SoloistInput:
     def __init__(self, source, *, config_path, state_dir, client_dir, bus_address):
         self.source = source
@@ -224,11 +227,13 @@ class SoloistInput:
         self._ws = None
         self._buffer = None
         self._load_task = None
+        self._park_expiry = None
         self._closed = False
         self._suppressed = False
         self._status = 'stopped'
         self._active = False
         self._item = None
+        self._item_duration = None
         self._speed = 0.0
         self._position = 0.0
         self._position_at = time.monotonic()
@@ -380,20 +385,27 @@ class SoloistInput:
         metadata = media_metadata(item)
         uri = item.get('uri')
         now = time.monotonic()
-        discontinuity = (self._item == uri and self._status == 'playing'
-                         and abs(position - self._position - (now - self._position_at) * self._speed) > 2)
+        expected_position = self._position + (now - self._position_at) * self._speed
+        discontinuity = self._item == uri and abs(position - expected_position) > 2
+        # Soloist does not distinguish a skip from normal track completion.
+        # Leave room for end-of-track crossfades and position reporting skew.
+        skipped = (self._item and uri and self._item != uri and self._item_duration
+                   and expected_position < self._item_duration - 15)
+        replace_audio = self._status == 'playing' and (discontinuity or skipped)
         newly_playing = status == 'playing' and (self._status != 'playing' or not self._active)
         self._status, self._active = status, active
         self._position, self._position_at, self._item = position, now, uri
+        self._item_duration = metadata.duration
         self._speed = speed
         if status in {'paused', 'stopped'} or not active:
             self._suppressed = False
-            await self._stop_audio()
+            if not (status == 'paused' and active and await self._park_audio()):
+                await self._stop_audio()
             diagnostic(status if status in {'paused', 'stopped'} else 'ready')
             return
         if status != 'playing' or self._suppressed:
             return
-        if newly_playing or (self.source.owns_output and discontinuity):
+        if newly_playing or (self.source.owns_output and replace_audio):
             diagnostic('starting')
             await self._start_audio(metadata, position)
         elif self.source.owns_output:
@@ -421,15 +433,19 @@ class SoloistInput:
 
     async def _start_audio(self, metadata, position):
         async with self._transition:
+            self._cancel_park_expiry()
             # Intentional replacement cancels a buffering AirPlay load, which
             # publishes IDLE/ERROR during cleanup. Detach its buffer first so
             # that status cannot pause the new Spotify selection.
             previous, self._buffer = self._buffer, None
-            if previous:
-                previous.close()
-            await self._cancel_load()
-            current = self._buffer = PcmBuffer()
-            await self.source.set_metadata(metadata)
+            try:
+                await self._cancel_load()
+                current = self._buffer = PcmBuffer()
+                await self.source.set_metadata(metadata)
+            except BaseException:
+                if previous:
+                    previous.close()
+                raise
             async def load():
                 try:
                     await self.source.load_pcm(current, start_time=position)
@@ -444,6 +460,10 @@ class SoloistInput:
                         await self.command('pause')
                     await self.source.stop()
             self._load_task = asyncio.create_task(load())
+            if previous:
+                # The old pump must be cancelled by the transport before it
+                # sees EOF, otherwise its error can stop the replacement.
+                self._load_task.add_done_callback(lambda _: previous.close())
 
     async def _cancel_load(self):
         task, self._load_task = self._load_task, None
@@ -453,15 +473,49 @@ class SoloistInput:
 
     async def _stop_audio(self):
         async with self._transition:
+            self._cancel_park_expiry()
             if self._buffer:
                 self._buffer.close()
                 self._buffer = None
             await self._cancel_load()
             await self.source.stop()
 
+    def _cancel_park_expiry(self):
+        if self._park_expiry:
+            self._park_expiry.cancel()
+            self._park_expiry = None
+
+    async def _park_audio(self):
+        async with self._transition:
+            if self._park_expiry:
+                return self.source.owns_output
+            if self._buffer is None or self._load_task is None or not self._load_task.done():
+                return False
+            previous, self._buffer = self._buffer, None
+            try:
+                parked = await self.source.park_pcm()
+            except (OSError, RuntimeError, TimeoutError):
+                return False
+            finally:
+                previous.close()
+            if parked:
+                self._park_expiry = asyncio.create_task(self._expire_park())
+            return parked
+
+    async def _expire_park(self):
+        await asyncio.sleep(_PAUSED_TRANSPORT_SECONDS)
+        async with self._transition:
+            if self._park_expiry is asyncio.current_task():
+                self._park_expiry = None
+                try:
+                    await self.source.stop()
+                except (OSError, RuntimeError, TimeoutError):
+                    diagnostic('failed', 'transport_failed')
+
     async def preempt(self):
         # Called while output ownership is changing; never re-enter its lock.
         self._suppressed = True
+        self._cancel_park_expiry()
         if self._buffer:
             self._buffer.close()
             self._buffer = None

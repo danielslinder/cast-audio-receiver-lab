@@ -391,7 +391,7 @@ class AirPlayAudioBackend(NullAudioBackend):
                     await self._start_pipeline(url, start_time)
                 else:
                     if self._cli is None:
-                        await self._start_transport()
+                        await self._start_transport(parallel_feedback=True)
                     assert self._cli is not None and self._cli.stdin is not None
                     self._pump_task = asyncio.create_task(self._pump_pcm(source, self._cli.stdin))
                 self._status.url = url
@@ -456,6 +456,18 @@ class AirPlayAudioBackend(NullAudioBackend):
                 await self._stop_pipeline()
             finally:
                 await super().stop()
+
+    async def park_pcm(self) -> bool:
+        """Suspend live PCM while keeping the AirPlay 2 session available."""
+        async with self._lock:
+            if (not self.persistent or self._route_protocol != "airplay2"
+                    or self._cli is None or self._cli.returncode is not None
+                    or self._status.state != "PLAYING"
+                    or self._status.content_type != "audio/pcm"):
+                return False
+            await self._stop_track()
+            await self.pause()
+            return True
 
     async def seek(self, position: float) -> None:
         status = self.status()
@@ -639,7 +651,7 @@ class AirPlayAudioBackend(NullAudioBackend):
             raise RuntimeError("AirPlay transport ended during flush")
         _diagnostic(logging.DEBUG, "flush_acknowledged", sequence=sequence)
 
-    async def _start_transport(self) -> None:
+    async def _start_transport(self, *, parallel_feedback: bool = False) -> None:
         self._transport_phase = "connecting"
         self._transport_error_code = "none"
         self._transport_error_http = "none"
@@ -650,6 +662,27 @@ class AirPlayAudioBackend(NullAudioBackend):
         dacp_id = dacp_identity(self.target)
         self._dacp = DacpServer(dacp_id, self._receiver_volume, self._receiver_control,
                                diagnostic=lambda event: _diagnostic(logging.INFO, event))
+        feedback = None
+        if parallel_feedback:
+            # Allow discovery announcements and the sender connection to run
+            # together. Both must finish before the caller starts live PCM.
+            feedback = asyncio.create_task(self._start_feedback())
+        else:
+            await self._start_feedback()
+        try:
+            await self._open_sender()
+            if feedback is not None:
+                await feedback
+        finally:
+            if feedback is not None:
+                feedback.cancel()
+                await asyncio.gather(feedback, return_exceptions=True)
+        self._transport_phase = "connected"
+        LOG.info("AirPlay transport created pid=%s", self._cli.pid)
+        _diagnostic(logging.INFO, "sender_ready", protocol=self.target.protocol)
+
+    async def _start_feedback(self) -> None:
+        assert self._dacp is not None
         try:
             await asyncio.wait_for(self._dacp.start(self.target.host, self.target.port), 5)
             _diagnostic(logging.INFO, 'dacp_ready')
@@ -660,6 +693,8 @@ class AirPlayAudioBackend(NullAudioBackend):
             _diagnostic(logging.WARNING, 'dacp_unavailable', error=type(exc).__name__)
             await self._dacp.close()
             self._dacp = None
+
+    async def _open_sender(self) -> None:
         _diagnostic(logging.DEBUG, "sender_start", protocol=self.target.protocol)
         temporary_directory = tempfile.TemporaryDirectory(prefix="cast-airplay-")
         self._temporary_directory = temporary_directory
@@ -686,9 +721,6 @@ class AirPlayAudioBackend(NullAudioBackend):
             asyncio.create_task(self._watch_cli(self._cli)),
         ]
         self._command_fd = await self._open_command_pipe(command_pipe)
-        self._transport_phase = "connected"
-        LOG.info("AirPlay transport created pid=%s", self._cli.pid)
-        _diagnostic(logging.INFO, "sender_ready", protocol=self.target.protocol)
 
     async def _open_command_pipe(self, path: Path) -> int:
         deadline = asyncio.get_running_loop().time() + 5.0

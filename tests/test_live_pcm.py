@@ -7,6 +7,27 @@ from cast_audio_lab.airplay import AirPlayAudioBackend, AirPlayTarget
 
 
 class LivePcmTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_live_sender_cancels_parallel_feedback_startup(self):
+        backend = AirPlayAudioBackend(AirPlayTarget('127.0.0.1'))
+        entered, cancelled = asyncio.Event(), asyncio.Event()
+
+        async def feedback():
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.set()
+
+        async def sender():
+            await entered.wait()
+            raise OSError('sender failed')
+
+        with patch.object(backend, '_start_feedback', side_effect=feedback), \
+             patch.object(backend, '_open_sender', side_effect=sender):
+            with self.assertRaisesRegex(OSError, 'sender failed'):
+                await asyncio.wait_for(backend._start_transport(parallel_feedback=True), 1)
+        self.assertTrue(cancelled.is_set())
+
     async def test_backpressure_is_bounded_and_overflow_wakes_reader_with_error(self):
         source = PcmBuffer(8)
         self.assertTrue(source.feed(b'123456'))
